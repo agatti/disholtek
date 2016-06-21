@@ -19,6 +19,7 @@
 # 3. This notice may not be removed or altered from any source distribution.
 
 from enum import Enum
+from functools import partial
 import os
 import struct
 import io
@@ -90,23 +91,60 @@ class Instruction(object):
 
 class Disassembler(object):
 
-    def __init__(self, input_path, labels=True):
+    def __init__(self, input_path, labels=True, listing=False):
         self._words = self._load_binary_file(input_path)
         self._code_address = 0
+        self._listing = listing
 
         self._instructions = [self._decode_word(word, address)
                               for (word, address) in enumerate(self._words)]
 
         self._labels = {}
+        self._variables = {}
+
         self._has_labels = labels
         if labels:
             self._assign_labels()
+            self._map_variables()
 
     def generate_output(self):
+        return self._produce_listing() if self._listing else \
+            self._produce_source()
+
+    _TEMPLATE = '''\t\tinclude BS83B08-3.inc
+
+\t\tds\t.section\t'data'
+
+%s
+
+\t\tcs\t.section\tat  000h\t'code'
+
+%s'''
+
+    def _produce_source(self):
+        code = self._produce_output(partial(self._format_header_source))
+        data = ''
+
+        with io.StringIO() as output:
+            last = 0
+            for location in sorted(self._variables.keys()):
+                if location != last:
+                    output.write('\t\tORG %04Xh\n' % location)
+                    last = location
+                last = location + 1
+                output.write('\t\t%s\tDB ?\n' % self._variables[location])
+            data = output.getvalue()
+
+        return Disassembler._TEMPLATE % (data, code)
+
+    def _produce_listing(self):
+        return self._produce_output(partial(self._format_header_listing))
+
+    def _produce_output(self, formatter):
         with io.StringIO() as output:
             for (address, instruction) in enumerate(self._instructions):
-                output.write(self._format_instruction(address,
-                                                      instruction))
+                output.write(self._format_instruction(
+                    formatter, address, instruction))
             return output.getvalue()
 
     def _load_binary_file(self, path):
@@ -133,9 +171,8 @@ class Disassembler(object):
         None, None, None, 'LVRC', 'PA', 'PAC', 'PAPU', 'PAWU', None, None,
         'WDTC', 'TBC', 'TMR', 'TMRC', 'EEA', 'EED', 'PB',
         # 20H
-        'PBC', 'PBPU',
-        'I2CTOC', 'SIMC0', 'SIMC1', 'SIMD', 'SIMC2', None, None, None, None,
-        None, None, None, None, None,
+        'PBC', 'PBPU', 'I2CTOC', 'SIMC0', 'SIMC1', 'SIMD', 'SIMC2', None, None,
+        None, None, None, None, None, None, None,
         # 30H
         None, None, None, None, None, None, None, None, None, None, None, None,
         None, None, None, None,
@@ -296,6 +333,19 @@ class Disassembler(object):
                 self._labels[instruction.first] = 'label%04X' % counter
                 counter += 1
 
+    def _map_variables(self):
+        counter = 0
+        for instruction in self._instructions:
+            if instruction.type in (Format.M2A, Format.A2M, Format.BIT,
+                                    Format.MEMORY):
+                if instruction.first >= (len(Disassembler._MEMORY_MAP) - 1):
+                    if instruction.first not in self._variables:
+                        variable_name = 'variable%04X' % counter
+                        self._variables[instruction.first] = variable_name
+                        counter += 1
+            else:
+                continue
+
     def _lookup_memory_location(self, location):
         if location < 0:
             raise Exception('Invalid memory location %d' % location)
@@ -303,15 +353,28 @@ class Disassembler(object):
         if location < len(Disassembler._MEMORY_MAP):
             result = Disassembler._MEMORY_MAP[location]
         if not result:
-            result = '[0%02Xh]' % location
+            if location in self._variables:
+                result = '[%s]' % self._variables[location]
+            else:
+                result = '[0%02Xh]' % location
+
         return result
 
-    def _format_instruction(self, address, instruction):
-        with io.StringIO() as output:
-            if address in self._labels:
-                output.write('\n%s:\n\n' % self._labels[address])
+    def _format_header_listing(self, output, address, instruction):
+        if address in self._labels:
+            output.write('\n%s:\n\n' % self._labels[address])
 
-            output.write('%04X\t%04X\t' % (address, instruction.word))
+        output.write('%04X\t%04X\t' % (address, instruction.word))
+
+    def _format_header_source(self, output, address, instruction):
+        if address in self._labels:
+            output.write('\n%s:\n\n' % self._labels[address])
+
+        output.write('\t\t')
+
+    def _format_instruction(self, header_formatter, address, instruction):
+        with io.StringIO() as output:
+            header_formatter(output, address, instruction)
 
             if instruction.type == Format.SPECIAL:
                 output.write(instruction.name)
@@ -336,8 +399,9 @@ class Disassembler(object):
                 target = self._lookup_memory_location(instruction.first)
                 output.write('%s\t%s' % (instruction.name, target))
             else:
-                output.write('; (%s) Invalid opcode' %
-                             bin(instruction.word)[2:].zfill(16))
+                output.write('dc\t%04X\t; (%s) Invalid opcode' %
+                             (instruction.word,
+                              bin(instruction.word)[2:].zfill(16)))
 
             output.write('\n')
 
@@ -350,10 +414,13 @@ if __name__ == '__main__':
                         help='the binary file to disassemble')
     parser.add_argument('--no-labels', action='store_false',
                         help='do not generate labels')
+    parser.add_argument('--listing', action='store_true',
+                        help='emit code listing instead of assembler source')
 
     arguments = parser.parse_args()
 
-    disassembler = Disassembler(arguments.binary, labels=arguments.no_labels)
+    disassembler = Disassembler(arguments.binary, labels=arguments.no_labels,
+                                listing=arguments.listing)
     print(disassembler.generate_output())
 
 # vim:et:syn=python:fdm=marker:ff=unix:number:ai:sta:fenc=utf-8

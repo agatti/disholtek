@@ -3,8 +3,7 @@
 ## Current version: 0.1
 
 This Python script disassembles binaries for Holtek's BS83B08A-3 low cost
-microcontrollers, creating something that can be easily reassembled after a
-tiny bit of preprocessing on the output.
+microcontrollers, creating something that can be easily reassembled.
 
 The script requires Python 3.4 or later to run, and its usage is almost
 self-explanatory.  Just pass the binary file you want to disassemble as an
@@ -21,9 +20,6 @@ BS83B12A-3, BS83B12A-4, BS83B16A-3, and BS83B16A-4 microcontrollers.
 * Add some heuristic to see whether to address `SIMC2` as `SIMA`.
 * Support more Holtek microcontrollers (there are plenty to add!).
 * Create an automatically generated test suite using the output of HT-IDE3000.
-* Making the disassembler able to generate re-assemblable output.
-* Automatically create entries in the data section for memory locations that
-are accessed in the code.
 
 ## Licence
 
